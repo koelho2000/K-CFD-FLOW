@@ -1,0 +1,1420 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador CFD Simplificado para Conforto Térmico</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/DragControls.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .step-card {
+            transition: all 0.3s ease-in-out;
+        }
+        .step-header {
+            cursor: pointer;
+        }
+        .step-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.5s ease-out, padding 0.5s ease-out;
+            padding: 0 1.5rem;
+        }
+        .step-content.open {
+            max-height: 1500px; /* Increased for more content */
+            padding: 1.5rem 1.5rem;
+        }
+        .slider-thumb::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #3b82f6;
+            cursor: pointer;
+            border-radius: 50%;
+        }
+        .slider-thumb::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            background: #3b82f6;
+            cursor: pointer;
+            border-radius: 50%;
+        }
+        #loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.75);
+            z-index: 9999;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            color: white;
+            font-size: 1.2rem;
+            backdrop-filter: blur(5px);
+        }
+        .spinner {
+            border: 8px solid #f3f3f3;
+            border-top: 8px solid #3b82f6;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            animation: spin 2s linear infinite;
+            margin-bottom: 20px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        #progress-bar-container {
+            width: 80%;
+            max-width: 400px;
+            background-color: #555;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        #progress-bar {
+            width: 0%;
+            height: 20px;
+            background-color: #3b82f6;
+            border-radius: 10px;
+            transition: width 0.3s ease-in-out;
+            text-align: center;
+            line-height: 20px;
+            font-size: 0.8rem;
+            font-weight: bold;
+        }
+        .dimension-label {
+            position: absolute;
+            background-color: rgba(255, 255, 255, 0.8);
+            color: #333;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            pointer-events: none;
+            transform: translateX(-50%) translateY(-50%);
+        }
+        .legend-label {
+            position: absolute;
+            left: 1.25rem;
+            background: rgba(255,255,255,0.7);
+            padding: 0 2px;
+            border-radius: 2px;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+    <div id="alert-overlay" class="hidden fixed inset-0 bg-black bg-opacity-50 z-[10000] flex justify-center items-center p-4">
+        <div class="bg-white p-6 rounded-lg shadow-xl text-center max-w-sm w-full">
+            <h3 class="text-xl font-bold text-yellow-600 mb-4">Aviso de Balanço de Caudais</h3>
+            <p id="alert-message" class="text-gray-700 mb-6">O balanço de caudais entre a insuflação e o retorno não é zero.</p>
+            <button id="close-alert-btn" class="bg-blue-500 text-white py-2 px-6 rounded-md hover:bg-blue-600">Percebido</button>
+        </div>
+    </div>
+
+    <div id="loading-overlay" class="hidden" style="display: none;">
+        <div class="spinner"></div>
+        <p>A simular... Por favor, aguarde.</p>
+        <p id="progress-text" class="mt-2 text-sm"></p>
+        <div id="progress-bar-container">
+            <div id="progress-bar">0%</div>
+        </div>
+        <div class="flex space-x-4 mt-6">
+            <button id="stop-simulation" class="bg-red-500 text-white py-2 px-6 rounded-md hover:bg-red-600 transition">Parar e Visualizar</button>
+            <button id="cancel-simulation" class="bg-gray-500 text-white py-2 px-6 rounded-md hover:bg-gray-600 transition">Cancelar e Voltar</button>
+        </div>
+    </div>
+
+    <div class="container mx-auto p-4 lg:p-6">
+        <div class="text-center mb-6">
+            <h1 class="text-3xl font-bold text-gray-700">Simulação CFD para Conforto Térmico</h1>
+            <p class="text-gray-500">Uma ferramenta simplificada para análise de distribuição de ar em espaços interiores.</p>
+        </div>
+
+        <div class="flex flex-col lg:flex-row gap-6">
+            <!-- Coluna de Configuração -->
+            <div class="lg:w-1/3 w-full">
+                <div id="setup-container" class="space-y-4">
+                    <!-- Passo 1 -->
+                    <div class="bg-white rounded-lg shadow-md step-card">
+                        <div class="step-header p-4 flex justify-between items-center bg-gray-50 rounded-t-lg">
+                            <h2 class="text-xl font-semibold text-gray-700">Passo 1: Dimensões do Espaço</h2>
+                            <span class="transform transition-transform">▼</span>
+                        </div>
+                        <div class="step-content open">
+                            <div class="space-y-3">
+                                <div>
+                                    <label for="dimX" class="block text-sm font-medium text-gray-600">Comprimento (X) (m):</label>
+                                    <input type="number" id="dimX" value="10" min="1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                </div>
+                                <div>
+                                    <label for="dimY" class="block text-sm font-medium text-gray-600">Largura (Y) (m):</label>
+                                    <input type="number" id="dimY" value="6" min="1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                </div>
+                                <div>
+                                    <label for="dimZ" class="block text-sm font-medium text-gray-600">Altura (Z) (m):</label>
+                                    <input type="number" id="dimZ" value="3" min="1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Passo 2 -->
+                    <div class="bg-white rounded-lg shadow-md step-card">
+                        <div class="step-header p-4 flex justify-between items-center bg-gray-50 rounded-t-lg">
+                            <h2 class="text-xl font-semibold text-gray-700">Passo 2: Malha de Simulação</h2>
+                            <span class="transform transition-transform rotate-180">▲</span>
+                        </div>
+                        <div class="step-content">
+                            <div class="space-y-3">
+                                <div>
+                                    <label for="meshSize" class="block text-sm font-medium text-gray-600">Tamanho do Elemento (m): <span id="meshSizeValue">0.5</span></label>
+                                    <input type="range" id="meshSize" min="0.1" max="1.0" step="0.05" value="0.5" class="mt-1 block w-full slider-thumb">
+                                </div>
+                                <div id="mesh-info" class="p-3 bg-blue-50 text-blue-800 rounded-md text-sm">
+                                    <p>Total de Células: <span id="cellCount" class="font-bold">...</span></p>
+                                    <p id="mesh-warning" class="text-yellow-600 font-semibold hidden">Aviso: Malha muito densa pode levar a um tempo de cálculo elevado.</p>
+                                </div>
+                                <button class="view-mesh-btn mt-2 w-full bg-gray-500 text-white py-2 px-4 rounded-md hover:bg-gray-600 transition text-sm">Ver Malha</button>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Passo 3 -->
+                    <div class="bg-white rounded-lg shadow-md step-card">
+                        <div class="step-header p-4 flex justify-between items-center bg-gray-50 rounded-t-lg">
+                            <h2 class="text-xl font-semibold text-gray-700">Passo 3: Grelhas (Máx. 5)</h2>
+                             <span class="transform transition-transform rotate-180">▲</span>
+                        </div>
+                        <div class="step-content">
+                            <div id="grilles-container" class="space-y-4"></div>
+                            <button id="addGrille" class="mt-4 w-full bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 transition">Adicionar Grelha</button>
+                            <div id="flow-balance-info" class="mt-4 p-3 rounded-md text-sm text-center"></div>
+                             <button class="view-mesh-btn mt-2 w-full bg-gray-500 text-white py-2 px-4 rounded-md hover:bg-gray-600 transition text-sm">Ver Malha</button>
+                        </div>
+                    </div>
+                     <!-- Passo 4 -->
+                     <div class="bg-white rounded-lg shadow-md step-card">
+                        <div class="step-header p-4 flex justify-between items-center bg-gray-50 rounded-t-lg">
+                            <h2 class="text-xl font-semibold text-gray-700">Passo 4: Condições de Fronteira</h2>
+                             <span class="transform transition-transform rotate-180">▲</span>
+                        </div>
+                        <div class="step-content">
+                           <div class="space-y-3">
+                                <div>
+                                    <label for="tempFloor" class="block text-sm font-medium text-gray-600">Temperatura do Pavimento (°C):</label>
+                                    <input type="number" id="tempFloor" value="18" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                                </div>
+                                <div>
+                                    <label for="tempWalls" class="block text-sm font-medium text-gray-600">Temperatura das Paredes (°C):</label>
+                                    <input type="number" id="tempWalls" value="20" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                                </div>
+                                <div>
+                                    <label for="tempCeiling" class="block text-sm font-medium text-gray-600">Temperatura do Teto (°C):</label>
+                                    <input type="number" id="tempCeiling" value="22" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Passo 5 -->
+                    <div class="bg-white rounded-lg shadow-md step-card">
+                        <div class="step-header p-4 flex justify-between items-center bg-gray-50 rounded-t-lg">
+                            <h2 class="text-xl font-semibold text-gray-700">Passo 5: Parâmetros da Simulação</h2>
+                             <span class="transform transition-transform rotate-180">▲</span>
+                        </div>
+                        <div class="step-content">
+                            <div class="space-y-3">
+                                <div>
+                                    <label for="simTime" class="block text-sm font-medium text-gray-600">Tempo Total (s): <span id="simTimeValue">600</span></label>
+                                    <input type="range" id="simTime" min="10" max="3600" step="10" value="600" class="mt-1 block w-full slider-thumb">
+                                </div>
+                                <div>
+                                    <label for="tempInitial" class="block text-sm font-medium text-gray-600">Temperatura Inicial do Ar (°C):</label>
+                                    <input type="number" id="tempInitial" placeholder="Média da envolvente" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                     <button id="start-simulation" class="w-full bg-green-500 text-white py-3 px-4 rounded-md hover:bg-green-600 transition font-bold text-lg shadow-lg">Iniciar Simulação</button>
+                </div>
+                
+                <!-- Painel de Resultados -->
+                <div id="results-container" class="hidden">
+                     <div class="bg-white rounded-lg shadow-md p-6 space-y-4">
+                        <h2 class="text-2xl font-bold text-center text-gray-700">Resultados da Simulação</h2>
+                        
+                        <div>
+                            <label for="time-slider" class="block text-sm font-medium text-gray-600">Tempo de Simulação (s): <span id="time-slider-value">0</span></label>
+                            <input type="range" id="time-slider" min="0" max="600" step="1" value="0" class="mt-1 block w-full slider-thumb">
+                            <div class="flex justify-center mt-2">
+                                <button id="play-pause-button" class="bg-blue-500 text-white py-2 px-6 rounded-md hover:bg-blue-600 transition">Play</button>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label for="variable-selector" class="block text-sm font-medium text-gray-600">Variável a Visualizar:</label>
+                            <select id="variable-selector" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                                <option value="temperature">Temperatura</option>
+                                <option value="velocity">Velocidade (Magnitude)</option>
+                            </select>
+                        </div>
+                        
+                        <div class="space-y-3 pt-4 border-t">
+                            <h3 class="font-semibold text-gray-700">Ferramentas de Visualização</h3>
+                            <button class="view-mesh-btn mt-2 w-full bg-gray-500 text-white py-2 px-4 rounded-md hover:bg-gray-600 transition text-sm">Ver Malha</button>
+                             <div class="flex items-center space-x-2 pt-2">
+                                <input type="checkbox" id="point-cloud-check" class="h-4 w-4 rounded border-gray-300 text-blue-600">
+                                <label for="point-cloud-check">Nuvem de Pontos (Volumétrica)</label>
+                            </div>
+                            <h3 class="font-semibold text-gray-700 pt-2">Planos de Corte</h3>
+                            <!-- Plano X -->
+                            <div class="flex items-center space-x-2">
+                                <input type="checkbox" id="slice-x-check" class="h-4 w-4 rounded border-gray-300 text-blue-600">
+                                <label for="slice-x-slider" class="w-20">Plano X:</label>
+                                <input type="range" id="slice-x-slider" min="0" max="10" step="0.1" class="w-full slider-thumb" disabled>
+                            </div>
+                            <!-- Plano Y -->
+                            <div class="flex items-center space-x-2">
+                                <input type="checkbox" id="slice-y-check" class="h-4 w-4 rounded border-gray-300 text-blue-600">
+                                <label for="slice-y-slider" class="w-20">Plano Y:</label>
+                                <input type="range" id="slice-y-slider" min="0" max="6" step="0.1" class="w-full slider-thumb" disabled>
+                            </div>
+                            <!-- Plano Z -->
+                             <div class="flex items-center space-x-2">
+                                <input type="checkbox" id="slice-z-check" class="h-4 w-4 rounded border-gray-300 text-blue-600">
+                                <label for="slice-z-slider" class="w-20">Plano Z:</label>
+                                <input type="range" id="slice-z-slider" min="0" max="3" step="0.1" class="w-full slider-thumb" disabled>
+                            </div>
+                        </div>
+
+                        <button id="back-to-setup" class="mt-4 w-full bg-gray-500 text-white py-2 px-4 rounded-md hover:bg-gray-600 transition">Nova Configuração</button>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- Coluna do Visualizador 3D -->
+            <div class="lg:w-2/3 w-full min-h-[400px] lg:min-h-0">
+                <div id="viewer-container" class="w-full h-full bg-white rounded-lg shadow-inner relative overflow-hidden">
+                    <canvas id="viewer-canvas"></canvas>
+                    <div id="dimension-labels-container"></div>
+                    <div id="legend-container" class="absolute bottom-4 right-4 bg-white/80 p-2 rounded-md shadow-lg hidden">
+                        <div id="legend-gradient" class="w-4 h-48 rounded"></div>
+                        <div id="legend-labels" class="relative h-48 text-xs text-gray-700 flex flex-col justify-between items-start">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // --- MOCK DATA E LÓGICA DE SIMULAÇÃO ---
+        let simulationData = {};
+        let simulationInterval = null;
+        let currentSimParams = {};
+        let totalTimeStepsForCurrentSim = 20;
+
+        function generateMockDataForStep(t, params, totalTimeSteps) {
+            const { dim, mesh, grilles, boundaries, sim } = params;
+            const nx = Math.round(dim.x / mesh.size);
+            const ny = Math.round(dim.y / mesh.size);
+            const nz = Math.round(dim.z / mesh.size);
+
+            if (t === 0) {
+                simulationData.temperature = [];
+                simulationData.velocity = [];
+                simulationData.dims = { nx, ny, nz };
+                simulationData.scale = { x: dim.x, y: dim.y, z: dim.z };
+
+                const tempGrid = new Float32Array(nx * ny * nz);
+                const velGrid = new Float32Array(nx * ny * nz);
+                let initialTemp = sim.initialTemp !== null && !isNaN(sim.initialTemp)
+                    ? sim.initialTemp
+                    : (boundaries.floor + boundaries.walls * 4 + boundaries.ceiling) / 6;
+
+                for (let k = 0; k < nz; k++) {
+                    for (let j = 0; j < ny; j++) {
+                        for (let i = 0; i < nx; i++) {
+                            const index = i + j * nx + k * nx * ny;
+                            let temp = initialTemp;
+                            if (k === 0) temp = (temp + boundaries.floor) / 2;
+                            if (k === nz - 1) temp = (temp + boundaries.ceiling) / 2;
+                            if (i === 0 || i === nx - 1 || j === 0 || j === ny - 1) temp = (temp + boundaries.walls) / 2;
+                            tempGrid[index] = temp;
+                            velGrid[index] = 0;
+                        }
+                    }
+                }
+                simulationData.temperature.push(tempGrid);
+                simulationData.velocity.push(velGrid);
+                return;
+            }
+
+            const prevTempGrid = simulationData.temperature[t - 1];
+            const prevVelGrid = simulationData.velocity[t - 1];
+            const nextTempGrid = new Float32Array(nx * ny * nz);
+            const nextVelGrid = new Float32Array(nx * ny * nz);
+
+            const avgTemp = prevTempGrid.reduce((a, b) => a + b, 0) / prevTempGrid.length;
+            const supplyGrilles = grilles.filter(g => g.type === 'Insuflação');
+
+            for (let k = 0; k < nz; k++) {
+                for (let j = 0; j < ny; j++) {
+                    for (let i = 0; i < nx; i++) {
+                        const index = i + j * nx + k * nx * ny;
+                        
+                        // --- 1. Difusão (Mistura com vizinhos) ---
+                        let neighborTempSum = 0;
+                        let neighborVelSum = 0;
+                        let neighborCount = 0;
+                        
+                        if (i > 0) { neighborTempSum += prevTempGrid[index - 1]; neighborVelSum += prevVelGrid[index - 1]; neighborCount++; }
+                        if (i < nx - 1) { neighborTempSum += prevTempGrid[index + 1]; neighborVelSum += prevVelGrid[index + 1]; neighborCount++; }
+                        if (j > 0) { neighborTempSum += prevTempGrid[index - nx]; neighborVelSum += prevVelGrid[index - nx]; neighborCount++; }
+                        if (j < ny - 1) { neighborTempSum += prevTempGrid[index + nx]; neighborVelSum += prevVelGrid[index + nx]; neighborCount++; }
+                        if (k > 0) { neighborTempSum += prevTempGrid[index - nx * ny]; neighborVelSum += prevVelGrid[index - nx * ny]; neighborCount++; }
+                        if (k < nz - 1) { neighborTempSum += prevTempGrid[index + nx * ny]; neighborVelSum += prevVelGrid[index + nx * ny]; neighborCount++; }
+
+                        const avgNeighborTemp = neighborCount > 0 ? neighborTempSum / neighborCount : prevTempGrid[index];
+                        const avgNeighborVel = neighborCount > 0 ? neighborVelSum / neighborCount : prevVelGrid[index];
+                        
+                        const diffusionFactor = 0.15;
+                        let diffusedTemp = (1 - diffusionFactor) * prevTempGrid[index] + diffusionFactor * avgNeighborTemp;
+                        let diffusedVel = (1 - diffusionFactor) * prevVelGrid[index] + diffusionFactor * avgNeighborVel;
+
+                        // --- 2. Flutuabilidade (Ar quente sobe, ar frio desce) ---
+                        const buoyancyFactor = 0.1;
+                        const tempDifference = prevTempGrid[index] - avgTemp;
+                         if (tempDifference > 0 && k < nz - 1) { // Ar quente tende a aquecer o ar de cima
+                            diffusedTemp = (1-buoyancyFactor) * diffusedTemp + buoyancyFactor * prevTempGrid[index + nx*ny];
+                         } else if (tempDifference < 0 && k > 0) { // Ar frio tende a arrefecer o ar de baixo
+                            diffusedTemp = (1-buoyancyFactor) * diffusedTemp + buoyancyFactor * prevTempGrid[index - nx*ny];
+                         }
+
+                        // --- 3. Influência das Grelhas ---
+                        let grilleInfluenceFactor = 0;
+                        let weightedGrilleTemp = 0;
+                        let maxGrilleVel = 0;
+
+                        supplyGrilles.forEach(grille => {
+                            const worldX = (i + 0.5) * mesh.size;
+                            const worldY = (j + 0.5) * mesh.size;
+                            const worldZ = (k + 0.5) * mesh.size;
+                            const vecToCell = new THREE.Vector3(worldX - grille.x, worldZ - grille.z, worldY - grille.y);
+                            const euler = new THREE.Euler(THREE.MathUtils.degToRad(grille.elevation), THREE.MathUtils.degToRad(grille.azimuth), 0, 'YXZ');
+                            const baseDirection = new THREE.Vector3(0, 0, 1).applyEuler(euler);
+                            const dist = vecToCell.length();
+                            if (dist === 0) return;
+                            const dotProduct = vecToCell.clone().normalize().dot(baseDirection);
+                            if (dotProduct > 0) {
+                                let spreadFactor;
+                                switch(grille.outlets) {
+                                    case 4: spreadFactor = 1.5; break;
+                                    case 2: spreadFactor = 3.0; break;
+                                    default: spreadFactor = 5.0; break;
+                                }
+                                const directionalInfluence = Math.pow(dotProduct, spreadFactor);
+                                const coreLength = grille.velocity * 1.5;
+                                const distanceInfluence = (dist < coreLength) ? 1.0 : coreLength / dist;
+                                const totalInfluence = Math.min(1.0, directionalInfluence * distanceInfluence);
+
+                                if (totalInfluence > grilleInfluenceFactor) {
+                                    grilleInfluenceFactor = totalInfluence;
+                                    weightedGrilleTemp = grille.temp;
+                                    maxGrilleVel = grille.velocity * totalInfluence;
+                                }
+                            }
+                        });
+
+                        // --- 4. Combina os efeitos e aplica as condições de fronteira ---
+                        let finalTemp = (1 - grilleInfluenceFactor) * diffusedTemp + grilleInfluenceFactor * weightedGrilleTemp;
+                        let finalVel = (1 - grilleInfluenceFactor) * diffusedVel + grilleInfluenceFactor * maxGrilleVel;
+                        
+                        if (k === 0) finalTemp = (finalTemp + boundaries.floor) / 2;
+                        if (k === nz - 1) finalTemp = (finalTemp + boundaries.ceiling) / 2;
+                        if (i === 0 || i === nx - 1 || j === 0 || j === ny - 1) finalTemp = (finalTemp + boundaries.walls) / 2;
+
+                        nextTempGrid[index] = finalTemp;
+                        nextVelGrid[index] = finalVel;
+                    }
+                }
+            }
+
+            simulationData.temperature.push(nextTempGrid);
+            simulationData.velocity.push(nextVelGrid);
+        }
+
+
+        // --- LÓGICA DO VISUALIZADOR 3D (THREE.JS) ---
+        let scene, camera, renderer, controls, roomBox, grilleMeshes = [], dragControls;
+        let sliceMeshes = {};
+        let pointCloud, meshVisualizationObject;
+        const dimensionLabels = {};
+        let particleSystem, isParticleTestRunning = false, particleClock = new THREE.Clock();
+
+
+        function init3DViewer() {
+            const container = document.getElementById('viewer-container');
+            if (!container) return;
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xf0f0f0);
+            camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera.position.set(15, 10, 15);
+            renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('viewer-canvas'), antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
+            directionalLight.position.set(1, 1, 0.5).normalize();
+            scene.add(directionalLight);
+            
+            initDragControls();
+
+            window.addEventListener('resize', onWindowResize, false);
+            animate();
+        }
+
+        function initDragControls() {
+            dragControls = new THREE.DragControls(grilleMeshes, camera, renderer.domElement);
+            dragControls.addEventListener('dragstart', () => controls.enabled = false);
+            dragControls.addEventListener('dragend', () => controls.enabled = true);
+            dragControls.addEventListener('drag', (event) => {
+                const grilleMesh = event.object;
+                if (!grilleMesh || !grilleMesh.geometry) return;
+
+                const { dim } = getParams();
+                if (!grilleMesh.geometry.boundingBox) {
+                    grilleMesh.geometry.computeBoundingBox();
+                }
+                const size = new THREE.Vector3();
+                grilleMesh.geometry.boundingBox.getSize(size);
+                
+                const halfWidth = size.x / 2;
+                const halfHeight = size.y / 2; 
+                const halfDepth = size.z / 2; 
+                
+                grilleMesh.position.x = Math.max(halfWidth, Math.min(dim.x - halfWidth, grilleMesh.position.x));
+                grilleMesh.position.z = Math.max(halfDepth, Math.min(dim.y - halfDepth, grilleMesh.position.z));
+                grilleMesh.position.y = Math.max(halfHeight, Math.min(dim.z - halfHeight, grilleMesh.position.y));
+
+                const snapThreshold = 0.2;
+                if (Math.abs(grilleMesh.position.x - halfWidth) < snapThreshold) grilleMesh.position.x = halfWidth;
+                if (Math.abs(grilleMesh.position.x - (dim.x - halfWidth)) < snapThreshold) grilleMesh.position.x = dim.x - halfWidth;
+                if (Math.abs(grilleMesh.position.z - halfDepth) < snapThreshold) grilleMesh.position.z = halfDepth;
+                if (Math.abs(grilleMesh.position.z - (dim.y - halfDepth)) < snapThreshold) grilleMesh.position.z = dim.y - halfDepth;
+                if (Math.abs(grilleMesh.position.y - halfHeight) < snapThreshold) grilleMesh.position.y = halfHeight;
+                if (Math.abs(grilleMesh.position.y - (dim.z - halfHeight)) < snapThreshold) grilleMesh.position.y = dim.z - halfHeight;
+
+                const grilleId = grilleMesh.userData.grilleId;
+                const grilleUI = document.getElementById(grilleId);
+                if (grilleUI) {
+                    grilleUI.querySelector('.grille-x').value = grilleMesh.position.x.toFixed(2);
+                    grilleUI.querySelector('.grille-y').value = grilleMesh.position.z.toFixed(2);
+                    grilleUI.querySelector('.grille-z').value = grilleMesh.position.y.toFixed(2);
+                }
+            });
+            dragControls.enabled = true;
+        }
+
+        function onWindowResize() {
+            const container = document.getElementById('viewer-container');
+            if (!container) return;
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            updateDimensionLabels();
+            if (isParticleTestRunning) {
+                updateParticles();
+            }
+            renderer.render(scene, camera);
+        }
+
+        function update3DScene(params) {
+            grilleMeshes.forEach(mesh => {
+                 const arrows = mesh.children.filter(c => c instanceof THREE.ArrowHelper);
+                 arrows.forEach(arrow => mesh.remove(arrow));
+                 scene.remove(mesh);
+            });
+            grilleMeshes = [];
+            dragControls.dispose();
+            
+            if (roomBox) scene.remove(roomBox);
+            Object.values(sliceMeshes).forEach(mesh => scene.remove(mesh));
+            sliceMeshes = {};
+
+            const { dim, grilles } = params;
+            const geometry = new THREE.BoxGeometry(dim.x, dim.z, dim.y);
+            const edges = new THREE.EdgesGeometry(geometry);
+            roomBox = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x333333 }));
+            roomBox.position.set(dim.x / 2, dim.z / 2, dim.y / 2);
+            scene.add(roomBox);
+
+            grilles.forEach(grilleData => {
+                const grilleGeom = new THREE.BoxGeometry(grilleData.width, grilleData.height, 0.1);
+                const grilleMat = new THREE.MeshStandardMaterial({ color: grilleData.type === 'Insuflação' ? 0x3b82f6 : 0xef4444 });
+                const mesh = new THREE.Mesh(grilleGeom, grilleMat);
+                mesh.position.set(grilleData.x, grilleData.z, grilleData.y);
+                mesh.userData.grilleId = grilleData.id;
+                scene.add(mesh);
+                grilleMeshes.push(mesh);
+                
+                if (grilleData.type === 'Insuflação') {
+                    updateGrilleArrows(mesh, grilleData);
+                }
+            });
+            
+            initDragControls();
+            
+            if (!document.getElementById('results-container').classList.contains('hidden')) {
+                // If in results mode, don't move camera
+            } else {
+                camera.position.set(dim.x * 1.5, dim.z * 1.5, dim.y * 1.5);
+                controls.target.set(dim.x / 2, dim.z / 2, dim.y / 2);
+            }
+            
+            setupSlices(dim);
+            createDimensionLabels(dim);
+            if (meshVisualizationObject) {
+                 toggleMeshVisibility(); // Remove old
+                 toggleMeshVisibility(); // Create new
+            }
+        }
+
+        function toggleMeshVisibility() {
+            const isVisible = !!meshVisualizationObject;
+            const buttons = document.querySelectorAll('.view-mesh-btn');
+
+            if (isVisible) {
+                scene.remove(meshVisualizationObject);
+                meshVisualizationObject.geometry.dispose();
+                meshVisualizationObject.material.dispose();
+                meshVisualizationObject = null;
+                buttons.forEach(btn => {
+                    btn.textContent = 'Ver Malha';
+                    btn.classList.remove('bg-red-500', 'hover:bg-red-600');
+                    btn.classList.add('bg-gray-500', 'hover:bg-gray-600');
+                });
+            } else {
+                const { dim, mesh } = getParams();
+                const nx = Math.round(dim.x / mesh.size);
+                const ny = Math.round(dim.y / mesh.size);
+                const nz = Math.round(dim.z / mesh.size);
+                const gridGeom = new THREE.BufferGeometry();
+                const points = [];
+                for (let j = 0; j <= ny; j++) for (let k = 0; k <= nz; k++) { points.push(0, k * mesh.size, j * mesh.size); points.push(dim.x, k * mesh.size, j * mesh.size); }
+                for (let i = 0; i <= nx; i++) for (let k = 0; k <= nz; k++) { points.push(i * mesh.size, k * mesh.size, 0); points.push(i * mesh.size, k * mesh.size, dim.y); }
+                for (let i = 0; i <= nx; i++) for (let j = 0; j <= ny; j++) { points.push(i * mesh.size, 0, j * mesh.size); points.push(i * mesh.size, dim.z, j * mesh.size); }
+                gridGeom.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+                meshVisualizationObject = new THREE.LineSegments(gridGeom, new THREE.LineBasicMaterial({ color: 0xcccccc, transparent: true, opacity: 0.5 }));
+                scene.add(meshVisualizationObject);
+                
+                buttons.forEach(btn => {
+                    btn.textContent = 'Ocultar Malha';
+                    btn.classList.remove('bg-gray-500', 'hover:bg-gray-600');
+                    btn.classList.add('bg-red-500', 'hover:bg-red-600');
+                });
+            }
+        }
+
+        function updateGrilleArrows(grilleMesh, grilleData) {
+            const oldArrows = grilleMesh.children.filter(c => c instanceof THREE.ArrowHelper);
+            oldArrows.forEach(arrow => grilleMesh.remove(arrow));
+
+            const baseEuler = new THREE.Euler(
+                THREE.MathUtils.degToRad(grilleData.elevation),
+                THREE.MathUtils.degToRad(grilleData.azimuth),
+                0, 'YXZ'
+            );
+            const baseQuaternion = new THREE.Quaternion().setFromEuler(baseEuler);
+            
+            let directions = [];
+            const spreadAngle = THREE.MathUtils.degToRad(22.5);
+
+            switch(grilleData.outlets) {
+                case 1:
+                    directions.push(new THREE.Vector3(0, 0, 1).applyQuaternion(baseQuaternion));
+                    break;
+                case 2: {
+                    const qLeft = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), spreadAngle);
+                    const qRight = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -spreadAngle);
+                    directions.push(new THREE.Vector3(0, 0, 1).applyQuaternion(qLeft).applyQuaternion(baseQuaternion));
+                    directions.push(new THREE.Vector3(0, 0, 1).applyQuaternion(qRight).applyQuaternion(baseQuaternion));
+                    break;
+                }
+                case 4: {
+                    const q1 = new THREE.Quaternion().setFromEuler(new THREE.Euler(spreadAngle, spreadAngle, 0));
+                    const q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(spreadAngle, -spreadAngle, 0));
+                    const q3 = new THREE.Quaternion().setFromEuler(new THREE.Euler(-spreadAngle, spreadAngle, 0));
+                    const q4 = new THREE.Quaternion().setFromEuler(new THREE.Euler(-spreadAngle, -spreadAngle, 0));
+                    directions.push(new THREE.Vector3(0, 0, 1).applyQuaternion(q1).applyQuaternion(baseQuaternion));
+                    directions.push(new THREE.Vector3(0, 0, 1).applyQuaternion(q2).applyQuaternion(baseQuaternion));
+                    directions.push(new THREE.Vector3(0, 0, 1).applyQuaternion(q3).applyQuaternion(baseQuaternion));
+                    directions.push(new THREE.Vector3(0, 0, 1).applyQuaternion(q4).applyQuaternion(baseQuaternion));
+                    break;
+                }
+            }
+            
+            directions.forEach(dir => {
+                const arrowHelper = new THREE.ArrowHelper(dir, new THREE.Vector3(0,0,0), 1, 0xffeb3b, 0.3, 0.2);
+                grilleMesh.add(arrowHelper);
+            });
+        }
+
+
+        function createDimensionLabels(dim) {
+            const container = document.getElementById('dimension-labels-container');
+            container.innerHTML = '';
+            const ids = ['dimX', 'dimY', 'dimZ'];
+            ids.forEach(id => {
+                const label = document.createElement('div');
+                label.id = `label-${id}`;
+                label.className = 'dimension-label';
+                container.appendChild(label);
+                dimensionLabels[id] = { element: label, vector: new THREE.Vector3() };
+            });
+
+            dimensionLabels.dimX.vector.set(dim.x / 2, 0, dim.y);
+            dimensionLabels.dimY.vector.set(dim.x, 0, dim.y / 2);
+            dimensionLabels.dimZ.vector.set(dim.x, dim.z / 2, dim.y);
+        }
+
+        function updateDimensionLabels() {
+            const { dim } = getParams();
+             if (!dim || !dimensionLabels.dimX) return;
+
+            dimensionLabels.dimX.element.textContent = `X: ${dim.x} m`;
+            dimensionLabels.dimY.element.textContent = `Y: ${dim.y} m`;
+            dimensionLabels.dimZ.element.textContent = `Z: ${dim.z} m`;
+
+            const canvas = renderer.domElement;
+            for (const key in dimensionLabels) {
+                const label = dimensionLabels[key];
+                const screenPos = label.vector.clone().project(camera);
+                
+                const x = (screenPos.x * 0.5 + 0.5) * canvas.clientWidth;
+                const y = (-screenPos.y * 0.5 + 0.5) * canvas.clientHeight;
+
+                label.element.style.left = `${x}px`;
+                label.element.style.top = `${y}px`;
+            }
+        }
+        
+        function updateAllVisualizations() {
+            if (!simulationData.dims) return;
+            updateSlices();
+            updatePointCloud();
+        }
+
+        function setupSlices(dim) {
+            Object.values(sliceMeshes).forEach(mesh => {
+                if(mesh.material.map) mesh.material.map.dispose();
+                mesh.material.dispose();
+                mesh.geometry.dispose();
+                scene.remove(mesh);
+            });
+            sliceMeshes = {};
+
+            ['x', 'y', 'z'].forEach(axis => {
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d');
+                const texture = new THREE.CanvasTexture(canvas);
+                const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide, transparent: true, opacity: 0.8 });
+
+                let geometry;
+                if (axis === 'x') geometry = new THREE.PlaneGeometry(dim.y, dim.z);
+                else if (axis === 'y') geometry = new THREE.PlaneGeometry(dim.x, dim.z);
+                else geometry = new THREE.PlaneGeometry(dim.x, dim.y);
+
+                const mesh = new THREE.Mesh(geometry, material);
+                
+                mesh.userData.sliceCanvas = canvas;
+                mesh.userData.sliceContext = context;
+                mesh.userData.sliceTexture = texture;
+
+                if (axis === 'x') mesh.rotation.y = Math.PI / 2;
+                if (axis === 'z') mesh.rotation.x = -Math.PI / 2;
+                
+                mesh.position.set(dim.x / 2, dim.z / 2, dim.y / 2);
+                mesh.visible = false;
+                scene.add(mesh);
+                sliceMeshes[axis] = mesh;
+            });
+        }
+        
+        function updateSlices() {
+            if (!simulationData.dims || !simulationData.temperature || simulationData.temperature.length === 0) return;
+            const { dataGrid, minVal, maxVal, avgVal } = getCurrentGridData();
+            if (!dataGrid) return;
+
+            updateLegend(minVal, maxVal, avgVal);
+            const getColor = (value) => {
+                const ratio = Math.max(0, Math.min(1, (value - minVal) / (maxVal - minVal)));
+                const h = (1 - ratio) * 240;
+                return `hsl(${h}, 100%, 50%)`;
+            };
+            const drawSlice = (axis) => {
+                const mesh = sliceMeshes[axis];
+                if (!mesh) return;
+                
+                const { sliceCanvas, sliceContext, sliceTexture } = mesh.userData;
+
+                const isChecked = document.getElementById(`slice-${axis}-check`).checked;
+                mesh.visible = isChecked;
+                if (!isChecked) return;
+                
+                const pos = parseFloat(document.getElementById(`slice-${axis}-slider`).value);
+                if (axis === 'x') mesh.position.x = pos;
+                if (axis === 'y') mesh.position.z = pos;
+                if (axis === 'z') mesh.position.y = pos;
+                const { nx, ny, nz } = simulationData.dims;
+                let w, h;
+                if (axis === 'x') { w = ny; h = nz; }
+                if (axis === 'y') { w = nx; h = nz; }
+                if (axis === 'z') { w = nx; h = ny; }
+                
+                if (sliceCanvas.width !== w) sliceCanvas.width = w;
+                if (sliceCanvas.height !== h) sliceCanvas.height = h;
+                
+                const indexPos = Math.round((pos / simulationData.scale[axis]) * (axis === 'x' ? nx : (axis === 'y' ? ny : nz)));
+                for (let i = 0; i < w; i++) {
+                    for (let j = 0; j < h; j++) {
+                        let index;
+                        if (axis === 'x') index = indexPos + i * nx + j * nx * ny;
+                        else if (axis === 'y') index = i + indexPos * nx + j * nx * ny;
+                        else if (axis === 'z') index = i + j * nx + indexPos * nx * ny;
+                        if(index >= 0 && index < dataGrid.length){
+                            sliceContext.fillStyle = getColor(dataGrid[index]);
+                            sliceContext.fillRect(i, h - 1 - j, 1, 1);
+                        }
+                    }
+                }
+                sliceTexture.needsUpdate = true;
+            };
+            ['x', 'y', 'z'].forEach(drawSlice);
+        }
+
+        function updatePointCloud() {
+            const isChecked = document.getElementById('point-cloud-check').checked;
+             if (!isChecked) {
+                if (pointCloud) pointCloud.visible = false;
+                return;
+            }
+            if (!simulationData.dims || !simulationData.temperature || simulationData.temperature.length === 0) return;
+            
+            const { dataGrid, minVal, maxVal } = getCurrentGridData();
+            if (!dataGrid) return;
+            
+            if (!pointCloud) { // Create geometry only once, if it doesn't exist for the current results
+                const { nx, ny, nz } = simulationData.dims;
+                const { size } = currentSimParams.mesh;
+                const positions = [];
+                const maxPoints = 60000; // Increased max points for better fidelity
+                const totalCells = nx * ny * nz;
+                const step = Math.max(1, Math.ceil(Math.pow(totalCells / maxPoints, 1/3)));
+                for (let k = 0; k < nz; k += step) {
+                    for (let j = 0; j < ny; j += step) {
+                        for (let i = 0; i < nx; i += step) {
+                            positions.push((i + 0.5) * size, (k + 0.5) * size, (j + 0.5) * size);
+                        }
+                    }
+                }
+                const geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                const material = new THREE.PointsMaterial({ size: size * 1.5, vertexColors: true, transparent: true, opacity: 0.7 });
+                pointCloud = new THREE.Points(geometry, material);
+                scene.add(pointCloud);
+            }
+            
+            pointCloud.visible = true;
+            const colors = [];
+            const positions = pointCloud.geometry.attributes.position.array;
+            const { size } = currentSimParams.mesh; // Use params from current sim
+
+            for (let i = 0; i < positions.length; i += 3) {
+                const worldX = positions[i];
+                const worldZ = positions[i+1];
+                const worldY = positions[i+2];
+                const gridI = Math.floor(worldX / size);
+                const gridJ = Math.floor(worldY / size);
+                const gridK = Math.floor(worldZ / size);
+                const { nx, ny } = simulationData.dims;
+                const index = gridI + gridJ * nx + gridK * nx * ny;
+                const value = dataGrid[index] || 0;
+                const ratio = Math.max(0, Math.min(1, (value - minVal) / (maxVal - minVal)));
+                const h = (1 - ratio) * 240;
+                const color = new THREE.Color(`hsl(${h}, 100%, 50%)`);
+                colors.push(color.r, color.g, color.b);
+            }
+
+            pointCloud.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            pointCloud.geometry.attributes.color.needsUpdate = true;
+        }
+
+        function getCurrentGridData() {
+            const variable = document.getElementById('variable-selector').value;
+            const timeSlider = document.getElementById('time-slider');
+            const sliderValue = parseFloat(timeSlider.value);
+            const maxSliderValue = parseFloat(timeSlider.max);
+            const completedSteps = simulationData.temperature.length - 1;
+            if (completedSteps < 0) return {};
+            const timeStep = (maxSliderValue > 0) ? Math.round((sliderValue / maxSliderValue) * completedSteps) : 0;
+            
+            const dataGrid = simulationData[variable][timeStep];
+            if (!dataGrid) return {};
+
+            let minVal = Infinity, maxVal = -Infinity, sum = 0;
+            for(let val of dataGrid) {
+                minVal = Math.min(minVal, val);
+                maxVal = Math.max(maxVal, val);
+                sum += val;
+            }
+            if(maxVal === minVal) maxVal += 1;
+            const avgVal = sum / dataGrid.length;
+
+            return { dataGrid, minVal, maxVal, avgVal };
+        }
+        
+        function updateLegend(min, max, avg) {
+            const legendContainer = document.getElementById('legend-container');
+            const gradient = document.getElementById('legend-gradient');
+            const labels = document.getElementById('legend-labels');
+            const variable = document.getElementById('variable-selector').value;
+
+            legendContainer.style.display = 'flex';
+            gradient.style.background = 'linear-gradient(to top, #0000ff, #00ff00, #ffff00, #ff0000)';
+            labels.innerHTML = '';
+            const unit = variable === 'temperature' ? '°C' : 'm/s';
+
+            const createLabel = (value, textPrefix = '', v_align) => {
+                const label = document.createElement('div');
+                label.className = 'legend-label';
+                label.textContent = `${textPrefix}${value.toFixed(1)} ${unit}`;
+                if (v_align === 'top') {
+                    label.style.top = '0%';
+                    label.style.transform = 'translateY(-50%)';
+                } else if (v_align === 'bottom') {
+                    label.style.bottom = '0%';
+                    label.style.transform = 'translateY(50%)';
+                } else { // center
+                    label.style.top = '50%';
+                    label.style.transform = 'translateY(-50%)';
+                }
+                labels.appendChild(label);
+            };
+            
+            createLabel(max, 'Máx: ', 'top');
+            createLabel(avg, 'Méd: ', 'center');
+            createLabel(min, 'Mín: ', 'bottom');
+        }
+
+        // --- LÓGICA DA INTERFACE DO UTILIZADOR (UI) ---
+        let nextGrilleId = 1;
+
+        function showAlert(message) {
+            document.getElementById('alert-message').textContent = message;
+            document.getElementById('alert-overlay').style.display = 'flex';
+        }
+
+        function setupUIListeners() {
+            document.getElementById('close-alert-btn').addEventListener('click', () => {
+                document.getElementById('alert-overlay').style.display = 'none';
+            });
+
+            document.querySelectorAll('.step-header').forEach(header => {
+                header.addEventListener('click', () => {
+                    const content = header.nextElementSibling;
+                    const icon = header.querySelector('span');
+                    const isOpen = content.classList.contains('open');
+                    document.querySelectorAll('.step-content.open').forEach(openContent => {
+                        openContent.classList.remove('open');
+                        openContent.previousElementSibling.querySelector('span').classList.add('rotate-180');
+                    });
+                    if (!isOpen) {
+                        content.classList.add('open');
+                        icon.classList.remove('rotate-180');
+                    }
+                });
+            });
+
+            ['meshSize', 'simTime'].forEach(id => {
+                document.getElementById(id).addEventListener('input', (e) => {
+                    document.getElementById(`${id}Value`).textContent = e.target.value;
+                });
+            });
+
+            ['dimX', 'dimY', 'dimZ', 'meshSize'].forEach(id => {
+                document.getElementById(id).addEventListener('input', () => {
+                    updateCellCount();
+                    update3DScene(getParams());
+                });
+            });
+            document.querySelectorAll('.view-mesh-btn').forEach(btn => btn.addEventListener('click', toggleMeshVisibility));
+            document.getElementById('addGrille').addEventListener('click', () => addGrille());
+            document.getElementById('start-simulation').addEventListener('click', startSimulation);
+            document.getElementById('stop-simulation').addEventListener('click', () => stopSimulation(false));
+            document.getElementById('cancel-simulation').addEventListener('click', cancelSimulation);
+            document.getElementById('back-to-setup').addEventListener('click', resetToSetup);
+            document.getElementById('time-slider').addEventListener('input', () => {
+                document.getElementById('time-slider-value').textContent = document.getElementById('time-slider').value;
+                updateAllVisualizations();
+            });
+            document.getElementById('play-pause-button').addEventListener('click', toggleAnimation);
+            document.getElementById('variable-selector').addEventListener('change', updateAllVisualizations);
+            ['x', 'y', 'z'].forEach(axis => {
+                document.getElementById(`slice-${axis}-check`).addEventListener('change', updateAllVisualizations);
+                document.getElementById(`slice-${axis}-slider`).addEventListener('input', updateAllVisualizations);
+                document.getElementById(`slice-${axis}-check`).addEventListener('change', (e) => {
+                    document.getElementById(`slice-${axis}-slider`).disabled = !e.target.checked;
+                });
+            });
+            document.getElementById('point-cloud-check').addEventListener('change', updateAllVisualizations);
+        }
+        
+        function updateCellCount() {
+            const dimX = parseFloat(document.getElementById('dimX').value) || 0;
+            const dimY = parseFloat(document.getElementById('dimY').value) || 0;
+            const dimZ = parseFloat(document.getElementById('dimZ').value) || 0;
+            const meshSize = parseFloat(document.getElementById('meshSize').value) || 0.1;
+            if (dimX > 0 && dimY > 0 && dimZ > 0) {
+                const countX = Math.ceil(dimX / meshSize);
+                const countY = Math.ceil(dimY / meshSize);
+                const countZ = Math.ceil(dimZ / meshSize);
+                const totalCells = countX * countY * countZ;
+                document.getElementById('cellCount').textContent = `${countX}x${countY}x${countZ} = ${totalCells.toLocaleString()}`;
+                document.getElementById('mesh-warning').classList.toggle('hidden', totalCells <= 1000000);
+            } else {
+                 document.getElementById('cellCount').textContent = '...';
+            }
+        }
+        
+        function addGrille(defaults = null) {
+            if (document.querySelectorAll('#grilles-container > div').length >= 5) return;
+            
+            const grilleId = `grille-div-${nextGrilleId++}`;
+            const container = document.getElementById('grilles-container');
+            const grilleDiv = document.createElement('div');
+            grilleDiv.className = 'p-4 border rounded-md space-y-3 relative grille-definition';
+            grilleDiv.id = grilleId;
+
+            const isSupply = !defaults || defaults.type === 'Insuflação';
+
+            grilleDiv.innerHTML = `
+                <button class="absolute top-2 right-2 text-red-500 hover:text-red-700 font-bold" onclick="removeGrille('${grilleId}')">X</button>
+                <h4 class="font-semibold">Grelha ${nextGrilleId-1}</h4>
+                <div><label class="block text-sm">Tipo:</label><select class="grille-type mt-1 block w-full rounded-md border-gray-300 shadow-sm"><option>Insuflação</option><option>Retorno</option></select></div>
+                <div class="grid grid-cols-3 gap-2">
+                    <div><label class="block text-sm">X (m):</label><input type="number" value="${defaults ? defaults.x : (nextGrilleId-1)*2}" class="grille-x mt-1 w-full rounded-md border-gray-300 shadow-sm"></div>
+                    <div><label class="block text-sm">Y (m):</label><input type="number" value="${defaults ? defaults.y : 0}" class="grille-y mt-1 w-full rounded-md border-gray-300 shadow-sm"></div>
+                    <div><label class="block text-sm">Z (m):</label><input type="number" value="${defaults ? defaults.z : 2.5}" class="grille-z mt-1 w-full rounded-md border-gray-300 shadow-sm"></div>
+                </div>
+                 <div class="grid grid-cols-2 gap-2">
+                    <div><label class="block text-sm">Largura (m):</label><input type="number" value="${defaults ? (defaults.width || 0.5) : 0.5}" min="0.1" class="grille-width mt-1 w-full rounded-md border-gray-300 shadow-sm"></div>
+                    <div><label class="block text-sm">Altura (m):</label><input type="number" value="${defaults ? (defaults.height || 0.2) : 0.2}" min="0.1" class="grille-height mt-1 w-full rounded-md border-gray-300 shadow-sm"></div>
+                </div>
+                <div class="grille-params space-y-2"></div>`;
+            container.appendChild(grilleDiv);
+            
+            const typeSelector = grilleDiv.querySelector('.grille-type');
+            typeSelector.value = defaults ? defaults.type : 'Insuflação';
+
+            const updateGrilleParamsUI = () => {
+                const paramsDiv = grilleDiv.querySelector('.grille-params');
+                if (typeSelector.value === 'Insuflação') {
+                    paramsDiv.innerHTML = `
+                        <div><label class="block text-sm">Caudal (m³/h):</label><input type="number" value="${defaults && isSupply ? defaults.flow : 300}" class="grille-flow mt-1 w-full rounded-md border-gray-300 shadow-sm"></div>
+                        <div><label class="block text-sm">Velocidade (m/s):</label><input type="number" value="${defaults && isSupply ? defaults.velocity : 2.5}" class="grille-velocity mt-1 w-full rounded-md border-gray-300 shadow-sm"></div>
+                        <div><label class="block text-sm">Temperatura (°C):</label><input type="number" value="${defaults && isSupply ? defaults.temp : 16}" class="grille-temp mt-1 w-full rounded-md border-gray-300 shadow-sm"></div>
+                        <div class="grid grid-cols-2 gap-2">
+                           <div><label class="block text-sm">Âng. Horiz (°):</label><input type="number" value="${defaults && isSupply ? defaults.azimuth : 90}" class="grille-azimuth mt-1 w-full rounded-md border-gray-300 shadow-sm"></div>
+                           <div><label class="block text-sm">Âng. Vert (°):</label><input type="number" value="${defaults && isSupply ? defaults.elevation : 0}" class="grille-elevation mt-1 w-full rounded-md border-gray-300 shadow-sm"></div>
+                        </div>
+                        <div>
+                            <label class="block text-sm">Nº de Saídas:</label>
+                            <select class="grille-outlets mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                                <option value="1">1 Saída (Jato Direto)</option>
+                                <option value="2">2 Saídas (Difusão Média)</option>
+                                <option value="4">4 Saídas (Difusão Larga)</option>
+                            </select>
+                        </div>
+                        <button class="test-reach-btn mt-2 w-full bg-indigo-500 text-white py-2 px-4 rounded-md hover:bg-indigo-600 transition text-sm">Testar Alcance</button>
+                        `;
+                    grilleDiv.querySelector('.grille-outlets').value = defaults && isSupply ? defaults.outlets : 2;
+                } else { // Retorno
+                    paramsDiv.innerHTML = `<div><label class="block text-sm">Caudal (m³/h):</label><input type="number" value="${defaults && !isSupply ? defaults.flow : 300}" class="grille-flow mt-1 w-full rounded-md border-gray-300 shadow-sm"></div>`;
+                }
+                grilleDiv.querySelectorAll('input, select').forEach(input => {
+                    input.addEventListener('input', () => {
+                        update3DScene(getParams());
+                        updateFlowBalance();
+                    })
+                });
+                grilleDiv.querySelector('.test-reach-btn')?.addEventListener('click', () => runParticleTest(grilleId));
+            }
+            typeSelector.addEventListener('change', () => { 
+                updateGrilleParamsUI();
+                updateFlowBalance();
+             });
+            grilleDiv.querySelectorAll('input').forEach(input => input.addEventListener('input', () => update3DScene(getParams())));
+            updateGrilleParamsUI();
+        }
+
+        function addDefaultGrilles() {
+            const { dim } = getParams();
+            const defaultZ = 2.5;
+            // Supply Grille
+            addGrille({
+                type: 'Insuflação',
+                x: 0.2, y: dim.y / 2, z: defaultZ,
+                flow: 500, velocity: 3, temp: 16,
+                azimuth: 90, elevation: 90, outlets: 1 // Angulo horizontal 90, vertical 90
+            });
+            // Return Grille
+            addGrille({
+                type: 'Retorno',
+                x: dim.x - 0.2, y: dim.y / 2, z: defaultZ, // Mesma altura
+                flow: 500
+            });
+        }
+
+        window.removeGrille = function(elementId) {
+            document.getElementById(elementId)?.remove();
+            update3DScene(getParams());
+            updateFlowBalance();
+        }
+
+        function updateFlowBalance() {
+            const { grilles } = getParams();
+            let supplyFlow = 0;
+            let returnFlow = 0;
+            grilles.forEach(g => {
+                if (g.type === 'Insuflação') {
+                    supplyFlow += g.flow;
+                } else {
+                    returnFlow += g.flow;
+                }
+            });
+            
+            const balance = supplyFlow - returnFlow;
+            const balanceDiv = document.getElementById('flow-balance-info');
+            balanceDiv.textContent = `Balanço: ${balance.toFixed(1)} m³/h`;
+
+            balanceDiv.classList.remove('bg-green-100', 'text-green-800', 'bg-red-100', 'text-red-800');
+            if (Math.abs(balance) < 0.01) {
+                 balanceDiv.classList.add('bg-green-100', 'text-green-800');
+                 balanceDiv.textContent += ' (OK)';
+            } else {
+                 balanceDiv.classList.add('bg-red-100', 'text-red-800');
+                 balanceDiv.textContent += ` (${balance > 0 ? 'Insuflação > Retorno' : 'Retorno > Insuflação'})`;
+            }
+        }
+
+        function getParams() {
+             const grilles = [];
+             document.querySelectorAll('.grille-definition').forEach(div => {
+                 const type = div.querySelector('.grille-type').value;
+                 let commonParams = { 
+                     id: div.id,
+                     type: type, 
+                     x: parseFloat(div.querySelector('.grille-x').value), 
+                     y: parseFloat(div.querySelector('.grille-y').value), 
+                     z: parseFloat(div.querySelector('.grille-z').value),
+                     width: parseFloat(div.querySelector('.grille-width').value),
+                     height: parseFloat(div.querySelector('.grille-height').value),
+                     flow: parseFloat(div.querySelector('.grille-flow')?.value || 0)
+                 };
+                 if (type === 'Insuflação') {
+                     grilles.push({ 
+                         ...commonParams, 
+                         velocity: parseFloat(div.querySelector('.grille-velocity').value), 
+                         temp: parseFloat(div.querySelector('.grille-temp').value),
+                         azimuth: parseFloat(div.querySelector('.grille-azimuth').value),
+                         elevation: parseFloat(div.querySelector('.grille-elevation').value),
+                         outlets: parseInt(div.querySelector('.grille-outlets').value)
+                     });
+                 } else {
+                     grilles.push(commonParams);
+                 }
+             });
+             return {
+                dim: { x: parseFloat(document.getElementById('dimX').value), y: parseFloat(document.getElementById('dimY').value), z: parseFloat(document.getElementById('dimZ').value) },
+                mesh: { size: parseFloat(document.getElementById('meshSize').value) },
+                grilles,
+                boundaries: { floor: parseFloat(document.getElementById('tempFloor').value), walls: parseFloat(document.getElementById('tempWalls').value), ceiling: parseFloat(document.getElementById('tempCeiling').value) },
+                sim: { time: parseFloat(document.getElementById('simTime').value), initialTemp: parseFloat(document.getElementById('tempInitial').value) }
+            };
+        }
+
+        function startSimulation() {
+            const { grilles } = getParams();
+            let supplyFlow = 0;
+            let returnFlow = 0;
+            grilles.forEach(g => {
+                if (g.type === 'Insuflação') {
+                    supplyFlow += g.flow;
+                } else {
+                    returnFlow += g.flow;
+                }
+            });
+            const balance = supplyFlow - returnFlow;
+
+            if (Math.abs(balance) > 0.01) {
+                showAlert(`O balanço de caudais não é zero (${balance.toFixed(1)} m³/h). Por favor, ajuste os valores de caudal para que a insuflação seja igual ao retorno.`);
+                return; 
+            }
+            
+            currentSimParams = getParams();
+            const loadingOverlay = document.getElementById('loading-overlay');
+            const progressBar = document.getElementById('progress-bar');
+            loadingOverlay.style.display = 'flex';
+            progressBar.style.width = '0%';
+            progressBar.textContent = '0%';
+            let currentStep = 0;
+            simulationData = {};
+
+            // Calcula os passos totais com base no tempo e na densidade da malha
+            const timeFactor = Math.max(10, Math.min(60, currentSimParams.sim.time / 30));
+            const meshFactor = 1 + ((1.0 - currentSimParams.mesh.size) / 0.9); // Multiplicador de 1.0 (malha larga) a 2.0 (malha fina)
+            totalTimeStepsForCurrentSim = Math.round(timeFactor * meshFactor);
+
+            simulationInterval = setInterval(() => {
+                generateMockDataForStep(currentStep, currentSimParams, totalTimeStepsForCurrentSim);
+                const progress = Math.round(((currentStep + 1) / totalTimeStepsForCurrentSim) * 100);
+                progressBar.style.width = `${progress}%`;
+                progressBar.textContent = `${progress}%`;
+                document.getElementById('progress-text').textContent = `A calcular passo de tempo ${currentStep + 1} de ${totalTimeStepsForCurrentSim}...`;
+                currentStep++;
+                if (currentStep >= totalTimeStepsForCurrentSim) {
+                    stopSimulation(true);
+                }
+            }, 150);
+        }
+
+        function stopSimulation(isFinished = false) {
+            clearInterval(simulationInterval);
+            simulationInterval = null;
+            document.getElementById('loading-overlay').style.display = 'none';
+            if (simulationData.temperature && simulationData.temperature.length > 0) {
+                 showResults(currentSimParams, totalTimeStepsForCurrentSim);
+            }
+        }
+        
+        function cancelSimulation() {
+            clearInterval(simulationInterval);
+            simulationInterval = null;
+            document.getElementById('loading-overlay').style.display = 'none';
+        }
+
+        function showResults(params, totalTimeSteps) {
+            document.getElementById('setup-container').classList.add('hidden');
+            document.getElementById('results-container').classList.remove('hidden');
+            const timeSlider = document.getElementById('time-slider');
+            const completedSteps = simulationData.temperature.length - 1;
+            
+            // Usa os passos totais calculados para a proporção correta do tempo
+            const totalStepsForCalc = totalTimeSteps > 1 ? totalTimeSteps - 1 : 1;
+            const simulatedTime = (completedSteps / totalStepsForCalc) * params.sim.time;
+
+            timeSlider.max = simulatedTime.toFixed(0);
+            timeSlider.value = 0;
+            document.getElementById('time-slider-value').textContent = '0';
+            ['x', 'y', 'z'].forEach(axis => {
+                const slider = document.getElementById(`slice-${axis}-slider`);
+                slider.max = params.dim[axis];
+                slider.value = params.dim[axis] / 2;
+            });
+            updateAllVisualizations();
+        }
+
+        function resetToSetup() {
+            document.getElementById('setup-container').classList.remove('hidden');
+            document.getElementById('results-container').classList.add('hidden');
+            document.getElementById('legend-container').style.display = 'none';
+            ['x', 'y', 'z'].forEach(axis => {
+                if(sliceMeshes[axis]) sliceMeshes[axis].visible = false;
+                document.getElementById(`slice-${axis}-check`).checked = false;
+                document.getElementById(`slice-${axis}-slider`).disabled = true;
+            });
+            if (pointCloud) {
+                scene.remove(pointCloud);
+                pointCloud.geometry.dispose();
+                pointCloud.material.dispose();
+                pointCloud = null;
+                document.getElementById('point-cloud-check').checked = false;
+            }
+            if(meshVisualizationObject){
+                toggleMeshVisibility();
+            }
+            update3DScene(getParams());
+        }
+
+        function getParticleColor(temp) {
+            const minTemp = 12;
+            const maxTemp = 30;
+            const ratio = Math.max(0, Math.min(1, (temp - minTemp) / (maxTemp - minTemp)));
+            const h = (1 - ratio) * 240; // 240 is blue, 0 is red
+            return new THREE.Color(`hsl(${h}, 100%, 50%)`);
+        }
+        
+        function runParticleTest(grilleId) {
+            if (isParticleTestRunning) {
+                isParticleTestRunning = false;
+                scene.remove(particleSystem);
+                particleSystem.geometry.dispose();
+                particleSystem.material.dispose();
+                particleSystem = null;
+            }
+            isParticleTestRunning = true;
+            particleClock.start();
+
+            const allParams = getParams();
+            const grilleData = allParams.grilles.find(g => g.id === grilleId);
+            if (!grilleData) return;
+
+            const particleCount = 2000;
+            const positions = new Float32Array(particleCount * 3);
+            const velocities = [];
+
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            
+            const material = new THREE.PointsMaterial({
+                color: getParticleColor(grilleData.temp),
+                size: 0.05,
+                transparent: true,
+                opacity: 0.8,
+                blending: THREE.AdditiveBlending
+            });
+
+            particleSystem = new THREE.Points(geometry, material);
+            particleSystem.userData = {
+                grilleData,
+                velocities,
+                particleIndex: 0,
+                particleLifetime: 4,
+                roomDims: allParams.dim
+            };
+            scene.add(particleSystem);
+        }
+
+        function updateParticles() {
+            if (!isParticleTestRunning || !particleSystem) return;
+
+            const deltaTime = particleClock.getDelta();
+            const elapsedTime = particleClock.getElapsedTime();
+            const { grilleData, velocities, particleLifetime, roomDims } = particleSystem.userData;
+            let { particleIndex } = particleSystem.userData;
+
+            const positions = particleSystem.geometry.attributes.position.array;
+            const emissionRate = 20;
+
+            for (let i = 0; i < emissionRate; i++) {
+                const pos = new THREE.Vector3(grilleData.x, grilleData.z, grilleData.y);
+                const baseEuler = new THREE.Euler(THREE.MathUtils.degToRad(grilleData.elevation), THREE.MathUtils.degToRad(grilleData.azimuth), 0, 'YXZ');
+                const baseQuaternion = new THREE.Quaternion().setFromEuler(baseEuler);
+                let direction = new THREE.Vector3(0, 0, 1);
+                
+                const spreadAngle = THREE.MathUtils.degToRad(22.5);
+                if (grilleData.outlets > 1) {
+                    const randomAngle = (Math.random() - 0.5) * spreadAngle * (grilleData.outlets === 4 ? 2 : 1);
+                    const randomTilt = (Math.random() - 0.5) * spreadAngle * (grilleData.outlets === 4 ? 2 : 1);
+                    const spreadQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(randomTilt, randomAngle, 0));
+                    direction.applyQuaternion(spreadQuat);
+                }
+                direction.applyQuaternion(baseQuaternion);
+                const vel = direction.multiplyScalar(grilleData.velocity * (1 + (Math.random() - 0.5) * 0.2));
+                positions[particleIndex * 3] = pos.x;
+                positions[particleIndex * 3 + 1] = pos.y;
+                positions[particleIndex * 3 + 2] = pos.z;
+                velocities[particleIndex] = { velocity: vel, spawnTime: elapsedTime };
+                particleIndex = (particleIndex + 1) % (positions.length / 3);
+            }
+            particleSystem.userData.particleIndex = particleIndex;
+
+            for (let i = 0; i < velocities.length; i++) {
+                const particle = velocities[i];
+                if (!particle) continue;
+
+                const age = elapsedTime - particle.spawnTime;
+                
+                const currentX = positions[i*3];
+                const currentY = positions[i*3+1]; // Scene Y is room Z
+                const currentZ = positions[i*3+2]; // Scene Z is room Y
+
+                if (age > particleLifetime || particle.spawnTime < 0 || currentX <= 0 || currentX >= roomDims.x || currentY <= 0 || currentY >= roomDims.z || currentZ <= 0 || currentZ >= roomDims.y) {
+                    positions[i*3] = -1000;
+                    particle.spawnTime = -1;
+                    continue;
+                }
+
+                positions[i*3] += particle.velocity.x * deltaTime;
+                positions[i*3+1] += particle.velocity.y * deltaTime;
+                positions[i*3+2] += particle.velocity.z * deltaTime;
+                particle.velocity.y -= 0.5 * deltaTime;
+            }
+
+            particleSystem.geometry.attributes.position.needsUpdate = true;
+
+            if (elapsedTime > particleLifetime + 1) {
+                isParticleTestRunning = false;
+                scene.remove(particleSystem);
+                particleSystem.geometry.dispose();
+                particleSystem.material.dispose();
+                particleSystem = null;
+            }
+        }
+
+
+        let animationInterval;
+        function toggleAnimation() {
+            const button = document.getElementById('play-pause-button');
+            const timeSlider = document.getElementById('time-slider');
+            if (animationInterval) {
+                clearInterval(animationInterval);
+                animationInterval = null;
+                button.textContent = 'Play';
+            } else {
+                button.textContent = 'Pause';
+                animationInterval = setInterval(() => {
+                    let currentValue = parseInt(timeSlider.value);
+                    const maxValue = parseInt(timeSlider.max);
+                    if (maxValue === 0) {
+                        clearInterval(animationInterval);
+                        animationInterval = null;
+                        button.textContent = 'Play';
+                        return;
+                    }
+                    const step = Math.max(1, Math.round(maxValue / 100));
+                    currentValue = (currentValue + step) % (maxValue + 1);
+                    timeSlider.value = currentValue;
+                    document.getElementById('time-slider-value').textContent = currentValue;
+                    updateAllVisualizations();
+                }, 100);
+            }
+        }
+        
+        // --- INICIALIZAÇÃO ---
+        document.addEventListener('DOMContentLoaded', () => {
+            init3DViewer();
+            setupUIListeners();
+            addDefaultGrilles();
+            updateCellCount();
+            updateFlowBalance();
+            update3DScene(getParams());
+        });
+    </script>
+</body>
+</html>
+
